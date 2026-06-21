@@ -9,7 +9,7 @@ This project implements a Colab-compatible audit pipeline for open-weight langua
 The main paper-accurate experiment loads and fingerprints four models live:
 
 - `meta-llama/Llama-3.2-1B`
-- `mistralai/Ministral-3-3B-Instruct-2512`
+- `mistralai/Ministral-8B-Instruct-2410`
 - `Qwen/Qwen2.5-1.5B`
 - `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`
 
@@ -43,5 +43,7 @@ The main paper-accurate experiment loads and fingerprints four models live:
 ## Notes
 
 The live paper experiment is slower than the exploratory single-model audit because it downloads and fingerprints all four models sequentially. For a quick app check, use the single-model audit or reduce perturbation runs, sequence length, and sampled gradient entries.
+
+The newer `mistralai/Ministral-3-3B-Instruct-2512` checkpoint uses a multimodal `Mistral3Config`, which is not compatible with the text-only `AutoModelForCausalLM` gradient pipeline. This implementation uses the text-only Ministral family checkpoint listed above for live text fingerprinting.
 
 Technical fingerprints are audit evidence, not standalone legal proof of model origin. Models without white-box weight access remain technically unverifiable under this gradient-based method.
