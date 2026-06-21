@@ -133,11 +133,13 @@ DEFAULT_MODEL_OPTIONS = [
     "Qwen/Qwen2.5-1.5B-Instruct",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
     "meta-llama/Llama-3.2-1B",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     "HuggingFaceTB/SmolLM2-135M-Instruct",
 ]
 
 PAPER_MODEL_IDS = [
     "meta-llama/Llama-3.2-1B",
+    "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     "Qwen/Qwen2.5-1.5B",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
 ]
@@ -157,6 +159,7 @@ REFERENCE_FAMILIES = {
     "Ministral-8B-Instruct-2410": "Ministral",
     "Mistral-7B": "Mistral",
     "Phi-3.5-mini": "Phi",
+    "SmolLM2-1.7B-Instruct": "SmolLM",
     "SmolLM2-135M": "SmolLM",
     "SmolLM2-135M-Instruct": "SmolLM",
 }
@@ -172,6 +175,7 @@ REFERENCE_MODEL_IDS = {
     "Ministral-8B-Instruct-2410": "mistralai/Ministral-8B-Instruct-2410",
     "Mistral-7B": "mistralai/Mistral-7B-v0.1",
     "Phi-3.5-mini": "microsoft/Phi-3.5-mini-instruct",
+    "SmolLM2-1.7B-Instruct": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
     "SmolLM2-135M": "HuggingFaceTB/SmolLM2-135M",
     "SmolLM2-135M-Instruct": "HuggingFaceTB/SmolLM2-135M-Instruct",
 }
@@ -200,6 +204,7 @@ REFERENCE_FINGERPRINTS: Dict[str, List[float]] = {
     "Ministral-8B-Instruct-2410": [0.00021, 0.0041, 1.65, 0.07, -0.18, 0.00020, 0.0039, 1.52, 0.06, -0.17, 0.00020, 0.0040, 1.58, 0.07, 8000.0, 36.0],
     "Mistral-7B": [0.00025, 0.0048, 1.90, 0.08, -0.22, 0.00023, 0.0045, 1.70, 0.07, -0.20, 0.00024, 0.0046, 1.80, 0.08, 7240.0, 32.0],
     "Phi-3.5-mini": [0.00008, 0.0009, 0.30, -0.02, 0.05, 0.00008, 0.0009, 0.20, -0.01, 0.04, 0.00008, 0.0009, 0.30, -0.02, 3820.0, 32.0],
+    "SmolLM2-1.7B-Instruct": [0.00033, 0.0058, 2.35, 0.12, -0.25, 0.00031, 0.0054, 2.05, 0.10, -0.23, 0.00032, 0.0056, 2.20, 0.10, 1700.0, 24.0],
     "SmolLM2-135M": [0.00031, 0.0055, 2.10, 0.10, -0.30, 0.00029, 0.0051, 1.80, 0.08, -0.28, 0.00030, 0.0053, 2.00, 0.09, 135.0, 12.0],
     "SmolLM2-135M-Instruct": [0.00032, 0.0056, 2.20, 0.11, -0.28, 0.00030, 0.0052, 1.90, 0.09, -0.26, 0.00031, 0.0054, 2.10, 0.10, 135.0, 12.0],
 }
@@ -1400,6 +1405,8 @@ def save_live_pca_plot(fingerprints: Dict[str, np.ndarray], out_dir: Path) -> st
             family = "Llama"
         elif "Ministral" in label:
             family = "Ministral"
+        elif "SmolLM" in label:
+            family = "SmolLM"
         else:
             family = "Unknown"
         ax.scatter(coords[idx, 0], coords[idx, 1], s=60, color=FAMILY_COLORS.get(family, "#1565c0"), edgecolor="black", linewidth=0.4)
@@ -1440,6 +1447,7 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
     qwen = "Qwen/Qwen2.5-1.5B"
     deepseek = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
     llama = "meta-llama/Llama-3.2-1B"
+    smollm = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
 
     def metric(a: str, b: str, col: str) -> float:
         row = pairwise[(pairwise["Model A"] == a) & (pairwise["Model B"] == b)]
@@ -1447,6 +1455,7 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
 
     qwen_deepseek = metric(qwen, deepseek, "Cosine Similarity")
     llama_qwen = metric(llama, qwen, "Cosine Similarity")
+    smollm_qwen = metric(smollm, qwen, "Cosine Similarity")
     hindi_llama = token_tax_all[
         (token_tax_all["Model"] == llama) & (token_tax_all["Language"] == "Hindi")
     ]["Fertility Phi"]
@@ -1458,13 +1467,13 @@ def paper_validation_checks(pairwise: pd.DataFrame, token_tax_all: pd.DataFrame)
                 "Paper Claim / Test": "DeepSeek derivative clusters near Qwen parent",
                 "Observed Metric": qwen_deepseek,
                 "Expected Direction": "high cosine similarity",
-                "Pass Heuristic": bool(qwen_deepseek >= llama_qwen),
+                "Pass Heuristic": bool(qwen_deepseek >= max(llama_qwen, smollm_qwen)),
             },
             {
-                "Paper Claim / Test": "Llama remains separated from Qwen family",
-                "Observed Metric": f"Llama-Qwen={llama_qwen:.4f}",
+                "Paper Claim / Test": "Llama and SmolLM remain separated from Qwen family",
+                "Observed Metric": f"Llama-Qwen={llama_qwen:.4f}, SmolLM-Qwen={smollm_qwen:.4f}",
                 "Expected Direction": "lower than DeepSeek-Qwen",
-                "Pass Heuristic": bool(qwen_deepseek > llama_qwen),
+                "Pass Heuristic": bool(qwen_deepseek > llama_qwen and qwen_deepseek > smollm_qwen),
             },
             {
                 "Paper Claim / Test": "Hindi token fertility exposes Indic token tax",
@@ -1787,7 +1796,7 @@ def build_dashboard():
 
         with gr.Tab("Live Paper Experiment"):
             gr.Markdown(
-                "This mode loads and fingerprints the live open-weight comparison set currently enabled in the notebook: Llama-3.2-1B, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
+                "This mode loads and fingerprints the live open-weight comparison set currently enabled in the notebook: Llama-3.2-1B, SmolLM2-1.7B-Instruct, Qwen2.5-1.5B, and DeepSeek-R1-Distill-Qwen-1.5B. It does not use stored reference fingerprints."
             )
             gr.Markdown(
                 "**Important:** this mode starts with `meta-llama/Llama-3.2-1B`, which normally requires a Hugging Face token with accepted Llama access. If the token is missing or unauthorized, the run will stop and the log will show the exact error."
