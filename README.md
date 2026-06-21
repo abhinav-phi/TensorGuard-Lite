@@ -21,7 +21,7 @@ The main live experiment loads and fingerprints the current open-weight comparis
 
 - Hugging Face model download and cache support.
 - Live multi-model experiment without stored reference fingerprints.
-- Gradient fingerprint extraction from attention and MLP layers.
+- Exact 16-feature gradient fingerprint extraction from global, attention, FFN/MLP, embedding, and structural signals.
 - Optional Gaussian perturbation during gradient probing.
 - Pairwise cosine similarity and Euclidean distance matrix.
 - PCA lineage visualization.

@@ -7,7 +7,7 @@
 # - Hugging Face model download and optional gated-model login.
 # - T4-aware fp16 model loading with small sequence length and dynamic cleanup.
 # - Training-free white-box gradient fingerprint extraction.
-# - 16-dimensional TensorGuard-Lite fingerprint vectors.
+# - Exact 16-dimensional TensorGuard-Lite fingerprint schema.
 # - Cosine and Euclidean similarity analysis.
 # - PCA lineage clustering export at publication resolution.
 # - Multilingual tokenizer fertility and token-tax analysis for English/Hindi/Tamil.
@@ -563,11 +563,31 @@ def discover_target_modules(model: nn.Module, max_modules: int = 12) -> List[Tup
     return [matches[i] for i in indices]
 
 
-def freeze_all_but_targets(model: nn.Module, target_modules: List[Tuple[str, nn.Module]]) -> None:
+def discover_embedding_modules(model: nn.Module, max_modules: int = 2) -> List[Tuple[str, nn.Module]]:
+    """Find token embedding modules for the exact 16-feature fingerprint schema."""
+    matches = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Embedding):
+            lowered = name.lower()
+            if any(key in lowered for key in ["embed", "wte", "tok_embeddings", "word_embeddings"]):
+                matches.append((name, module))
+    if not matches:
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Embedding):
+                matches.append((name, module))
+    return matches[:max_modules]
+
+
+def freeze_all_but_targets(
+    model: nn.Module,
+    target_modules: List[Tuple[str, nn.Module]],
+    embedding_modules: List[Tuple[str, nn.Module]],
+) -> None:
     for param in model.parameters():
         param.requires_grad_(False)
-    target_ids = {id(module.weight) for _, module in target_modules if hasattr(module, "weight")}
-    for _, module in target_modules:
+    selected_modules = target_modules + embedding_modules
+    target_ids = {id(module.weight) for _, module in selected_modules if hasattr(module, "weight")}
+    for _, module in selected_modules:
         if hasattr(module, "weight") and id(module.weight) in target_ids:
             module.weight.requires_grad_(True)
 
@@ -591,35 +611,39 @@ def stable_stats(values: np.ndarray) -> List[float]:
 
 def category_for_module(name: str) -> str:
     lowered = name.lower()
+    if any(key in lowered for key in ["embed", "wte", "tok_embeddings", "word_embeddings"]):
+        return "embedding"
     if any(key in lowered for key in ["q_proj", "query"]):
-        return "query"
+        return "attention"
     if any(key in lowered for key in ["k_proj", "key"]):
-        return "key"
+        return "attention"
     if any(key in lowered for key in ["v_proj", "value"]):
-        return "value"
+        return "attention"
     if any(key in lowered for key in ["o_proj", "out_proj", "output"]):
-        return "projection"
+        return "attention"
+    if any(key in lowered for key in ATTENTION_KEYWORDS):
+        return "attention"
     if any(key in lowered for key in MLP_KEYWORDS):
-        return "mlp"
+        return "ffn"
     return "other"
 
 
 def collect_gradient_values(
     target_modules: List[Tuple[str, nn.Module]],
+    embedding_modules: List[Tuple[str, nn.Module]],
     max_total_entries: int = 500000,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     by_category: Dict[str, List[np.ndarray]] = {
-        "query": [],
-        "key": [],
-        "value": [],
-        "projection": [],
-        "mlp": [],
+        "attention": [],
+        "ffn": [],
+        "embedding": [],
         "other": [],
     }
     all_values = []
 
-    per_module_limit = max(1, int(max_total_entries) // max(1, len(target_modules)))
-    for name, module in target_modules:
+    selected_modules = target_modules + embedding_modules
+    per_module_limit = max(1, int(max_total_entries) // max(1, len(selected_modules)))
+    for name, module in selected_modules:
         grad = getattr(module.weight, "grad", None)
         if grad is None:
             continue
@@ -673,21 +697,20 @@ def build_16d_fingerprint(
     total_params_m: float,
     active_layer_count: int,
 ) -> np.ndarray:
-    """PRD-compliant 16D vector: 5 global + 9 category + 2 structural."""
+    """Exact 16D schema: 5 global + 3 attention + 3 FFN + 3 embedding + 2 structural."""
     global_features = stable_stats(all_gradients)
 
-    category_order = ["query", "key", "value", "projection", "mlp"]
     category_features = []
-    for category in category_order:
+    for category in ["attention", "ffn", "embedding"]:
         vals = category_gradients.get(category, np.array([]))
         if vals.size == 0:
-            category_features.extend([0.0, 0.0])
+            category_features.extend([0.0, 0.0, 0.0])
         else:
-            category_features.extend([float(np.mean(np.abs(vals))), float(np.linalg.norm(vals))])
-
-    category_features = category_features[:9]
-    while len(category_features) < 9:
-        category_features.append(0.0)
+            category_features.extend([
+                float(np.mean(vals)),
+                float(np.std(vals)),
+                float(np.linalg.norm(vals)),
+            ])
 
     structural_features = [float(total_params_m), float(active_layer_count)]
     vector = np.array(global_features + category_features + structural_features, dtype=np.float64)
@@ -711,12 +734,13 @@ class TensorGuardLiteAuditor:
         )
         repo_metadata = inspect_model_repository(actual_model_id, self.config.hf_token)
         target_modules = discover_target_modules(model, max_modules=12)
+        embedding_modules = discover_embedding_modules(model, max_modules=1)
         if not target_modules:
             raise RuntimeError("No linear modules found for gradient fingerprint extraction.")
 
-        freeze_all_but_targets(model, target_modules)
+        freeze_all_but_targets(model, target_modules, embedding_modules)
         total_params_m = round(sum(p.numel() for p in model.parameters()) / 1e6, 3)
-        active_layer_count = len(target_modules)
+        active_layer_count = len(target_modules) + len(embedding_modules)
 
         vectors = []
         start = time.time()
@@ -760,6 +784,7 @@ class TensorGuardLiteAuditor:
 
             all_gradients, category_gradients = collect_gradient_values(
                 target_modules,
+                embedding_modules,
                 max_total_entries=int(self.config.sample_gradient_entries),
             )
             vector = build_16d_fingerprint(
@@ -786,6 +811,25 @@ class TensorGuardLiteAuditor:
             "target_modules": [name for name, _ in target_modules],
             "total_params_m": total_params_m,
             "active_layer_count": active_layer_count,
+            "embedding_modules": [name for name, _ in embedding_modules],
+            "fingerprint_schema": [
+                "global_mean",
+                "global_std",
+                "global_norm",
+                "global_skewness",
+                "global_kurtosis",
+                "attention_mean",
+                "attention_std",
+                "attention_norm",
+                "ffn_mean",
+                "ffn_std",
+                "ffn_norm",
+                "embedding_mean",
+                "embedding_std",
+                "embedding_norm",
+                "total_params",
+                "num_layers",
+            ],
             "sample_gradient_entries": self.config.sample_gradient_entries,
             "weight_noise_std": self.config.weight_noise_std,
             "download_report": download_report,
@@ -1093,6 +1137,8 @@ def metadata_to_dataframe(metadata: Dict[str, object]) -> pd.DataFrame:
         {"Field": "Reused Cached Files", "Value": download.get("reused_cached_files", "")},
         {"Field": "Cache Directory", "Value": download.get("cache_dir", "")},
         {"Field": "Target Modules", "Value": ", ".join(metadata.get("target_modules", []))},
+        {"Field": "Embedding Modules", "Value": ", ".join(metadata.get("embedding_modules", []))},
+        {"Field": "Fingerprint Schema", "Value": ", ".join(metadata.get("fingerprint_schema", []))},
     ]
     return pd.DataFrame(rows)
 
