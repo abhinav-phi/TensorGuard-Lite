@@ -4,7 +4,7 @@ Abhinav
 Netaji Subhas Institute of Technology (NSUT)
 
 Adarsh
-Guru Tegh Bahadur Institute of Technology (GTBIT)
+Guru Tegh Bahadur 4th Centenary Engineering College (GTB4CEC)
 
 With
 Apart Research
